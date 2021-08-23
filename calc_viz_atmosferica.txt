@@ -1,0 +1,215 @@
+//pentru senzorul de presiune
+#include <Wire.h>
+#include <SPI.h>
+#include <Adafruit_BMP280.h>
+
+// include the library for LCD  
+#include <LiquidCrystal.h>
+
+//pentru senzorul de temperatura
+#include "dht.h"
+#define dht_apin A0 // Analog Pin sensor is connected to
+
+//defineuri pentru senzorul de presiune
+#define BMP_SCK  (13)
+#define BMP_MISO (12)
+#define BMP_MOSI (11)
+#define BMP_CS   (10)
+Adafruit_BMP280 bmp; // I2C
+
+// initialize the library by associating any needed LCD interface pin
+// with the arduino pin number it is connected to
+const int rs = 12, en = 11, d4 = 5, d5 = 4, d6 = 3, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+//salvez penultima temperatura
+int keep_temp = -1;
+
+//salvez ultimul ppm
+double keep_ppm = -1;
+
+//salvez ultime umiditate
+double keep_humidity;
+
+//vizibilitatea
+float visibility = 65778;
+//pentru senzorul de temperatura
+dht DHT;
+
+//pinul analogic pentru fum/gaz
+int smokeA0 = A3;
+int ok = 0;
+int control = 0;
+
+//buzzerul
+int buzzer = 10;
+int visibilityThres = 31000;
+int vizPIN = A1;
+
+void setup() 
+{
+
+  //setup buzzer
+  pinMode(buzzer, OUTPUT);
+  pinMode(vizPIN, INPUT);
+  
+  pinMode(smokeA0, INPUT);
+  Serial.begin(9600);
+  delay(500);
+  Serial.println("Date de la senzori: ");
+  Serial.println("- - - - - - - - - - - - - - - - - ");
+  Serial.println("\n");
+  
+  if (!bmp.begin(0x76)) {
+    Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
+    while (1);
+  }
+
+  /* Default settings from datasheet. */
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
+                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
+                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
+                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
+                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */  
+  
+ 
+  delay(1000);
+}
+
+void loop() {
+
+  
+  //citire date de la senzorul de fum/gaz/alcool si afisare 
+  int analogSensor = analogRead(smokeA0);
+  Serial.print("Valoarea de la senzorul de particule(fum/gaz/alcool): ");
+  Serial.println(analogSensor);
+
+  //citire date de la senzorul de temperatura/umiditate si afisare
+  DHT.read11(dht_apin);
+  Serial.print("Valoarea umiditatii de la senzorul de temperatura/umiditate este:  ");
+  float humidity = DHT.humidity;
+  Serial.print(DHT.humidity);
+  Serial.println("%  ");
+  Serial.print("Valoare temperaturii de la senzorul de temperatura/umiditate este:  ");
+  int temp = DHT.temperature;
+  Serial.print(DHT.temperature); 
+  Serial.println("*C  ");
+
+
+  //citire date de la senzorul de presiune
+  Serial.print(F("Valoare presiunii de la senzorul de presiune este: "));
+  Serial.print(bmp.readPressure());
+  Serial.println(" Pa");
+  //Serial.println("Valoarea altitudinii de la senzorul de presiune este: ");
+  //float altitude = bmp.readAltitude();
+  //Serial.println(altitude);
+
+  //pentru altitudine/presiune
+  if(control < 3)
+  {
+    //calculate the visibility as a function of altitude
+    //the radius of the earth
+    double R = 637; //*10^4
+    double altitude = bmp.readAltitude();
+    double multiply = 2 * R * altitude;
+    double radical = sqrt(multiply) * 100;
+    double what = radical / R;
+    what = (double)(what / 1000);
+    visibility = R * 10000 * atan(what / 10);
+    control = control + 1;
+  }
+
+  //primul calcul sa fie in functie de valorile 
+  //de vizibilitate maxima etc
+  if(control == 2)
+  {
+    keep_ppm = 85;
+    keep_temp = 7;
+    keep_humidity = 30;
+  }
+ 
+  //modificare dupa temperatura - vector hardcodat dupa grafic
+  //graficul nu are o anumita logica asa ca a fost nevoie sa tin valori pentru fiecare temperatura intre 0*C si 35*C
+  //modificarile sunt atat de cam mici si nu prea influenteaza valoarea finala
+  float viz[] = {6.5, 6.25, 6, 6, 5.75, 5.5, 5.25, 5, 5, 5.5, 6, 6.5, 7, 7, 7, 7, 7, 7, 7, 7.25, 7.5, 7.75, 8,
+  8, 8, 8, 8, 8, 8, 8.5, 9, 9.5, 10, 10, 10, 10};
+  if(temp != keep_temp)
+  {
+    visibility = visibility + ((viz[temp] - viz[keep_temp]) * 1000);
+  }
+
+
+
+  //modificare in functie de fum
+  double a = -35;
+  double b = 63;
+  double  Cs = analogSensor;
+  double value_of_function = a * Cs / 1000 + b;
+  if(keep_ppm != -1)
+  {
+    double value_for_old = a * keep_ppm / 1000 + b; //afisare vizibilitate
+    visibility = visibility + ((value_of_function - value_for_old) * 1000);
+  }
+
+
+
+  //modificare in functie de umiditate - dar e *10 ca e schimbare mica pe grafic
+  //si ca sa se vada la testare
+  double c = -40;
+  double d = 6400;
+  double function_humidity = c * humidity + d;
+  if(keep_humidity != -1) //keep_humidity este umiditatea anterioară
+  {
+    double function_humidity_old = c * keep_humidity + d;
+    Serial.println(function_humidity);
+    Serial.println(function_humidity_old);
+    Serial.println(visibility);
+    visibility = visibility + (function_humidity - function_humidity_old) * 10;
+  }
+  
+  
+  //afisare vizibilitate
+  if(control >= 2)
+  { Serial.print("Vizibilitatea este de: ");
+    Serial.print(visibility);
+    Serial.println(" metri");
+  }
+
+  if(control > 2)
+  { //LCD
+    // set up the LCD's number of columns and rows:
+    lcd.begin(16, 2);
+    // Print a message to the LCD.
+    lcd.print("Vizibilitatea ");
+    lcd.setCursor(0, 1);
+    lcd.print("este: ");
+    lcd.print(visibility);
+    lcd.print("m");
+  }
+
+  if (visibility < visibilityThres && control >= 2)
+  {
+    tone(buzzer, 1000, 2000);
+  }
+  else
+  {
+    noTone(buzzer);
+  }
+  //delay(100);
+
+  
+  //pentru a avea grija sa incep masuratorile
+  //de la vizibilitatea maxima data de altitudine
+  if(control > 2)
+  { 
+    keep_humidity = humidity;
+    keep_temp = temp;
+    keep_ppm = analogSensor;
+  }
+  
+  //dupa afisare de la senzori stau un numar de secunde
+  //si dupa citesc iar si afisez noile valori - care
+  //poate se mai modifica
+  Serial.println("\n");
+  delay(3000);
+}

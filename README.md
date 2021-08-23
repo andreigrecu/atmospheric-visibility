@@ -1,1 +1,2 @@
-# atmospheric-visibility
+# atmospheric-visibility  
+Check the master branch.
